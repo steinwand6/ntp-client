@@ -1,9 +1,11 @@
+mod cli;
 mod clock;
 
 use byteorder::{BigEndian, ReadBytesExt};
 use chrono::{DateTime, TimeZone, Timelike, Utc};
-use clap::{Parser, ValueEnum};
+use clap::Parser;
 
+use cli::*;
 use clock::Clock;
 
 const NTP_MESSAGE_LENGTH: usize = 48;
@@ -108,44 +110,12 @@ impl NTPMessage {
     }
 }
 
-#[derive(Parser, Debug)]
-#[command(
-    name = "clock",
-    version = "0.1",
-    about = "Gets and (aspirationally) sets the time."
-)]
-struct Cli {
-    // Action to perform: get or set
-    #[arg()]
-    action: Option<Action>,
-    // Time standard to use for output
-    #[arg(short, long = "use-standard", default_value = "rfc3339")]
-    std: TimeStandard,
-    // Datetime value, used when the action is "set"
-    #[arg()]
-    datetime: Option<String>,
-}
-
-#[derive(Debug, ValueEnum, Clone)]
-enum Action {
-    Get,
-    Set,
-    CheckNtp,
-}
-
-#[derive(Debug, ValueEnum, Clone)]
-enum TimeStandard {
-    Rfc3339,
-    Rfc2822,
-    Timestamp,
-}
-
 fn main() {
     let args = Cli::parse();
-    let action = args.action.unwrap_or(Action::Get);
-    let std = args.std;
-    let datetime = args.datetime;
-    println!("{:?} {:?}", action, std);
+    let action = args.get_action();
+    let std = args.get_std();
+    let datetime = args.get_datetime();
+
     match action {
         Action::Get => {
             let now = Clock::get();
@@ -162,7 +132,13 @@ fn main() {
                 TimeStandard::Rfc2822 => DateTime::parse_from_rfc2822(&t_),
                 _ => unimplemented!(),
             };
-            let t = t.expect(&format!("Unable to parse {} as {:?}", t_, std));
+            let t = match t {
+                Ok(t) => t,
+                Err(_) => {
+                    eprintln!("error: Unable to parse {} as {:?}", t_, std);
+                    return;
+                }
+            };
             Clock::set(t);
 
             let maybe_error = std::io::Error::last_os_error();
