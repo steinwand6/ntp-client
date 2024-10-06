@@ -1,6 +1,8 @@
 mod cli;
 mod clock;
 
+use std::{net::UdpSocket, time::Duration};
+
 use byteorder::{BigEndian, ReadBytesExt};
 use chrono::{DateTime, TimeZone, Timelike, Utc};
 use clap::Parser;
@@ -110,6 +112,85 @@ impl NTPMessage {
     }
 }
 
+/// This function calculates the weighted mean (average) of a set of values.
+/// Each value has a weight, and values with higher weights have more influence on the result.
+/// weights: A vector of weights, each corresponding to a value in the `values` vector.
+/// values: A vector of values to calculate the weighted mean from.
+fn weighted_mean(values: &Vec<f64>, weights: &Vec<f64>) -> f64 {
+    let weighted_sum: f64 = values
+        .iter()
+        .zip(weights.iter())
+        .map(|(value, weight)| value * weight)
+        .sum();
+
+    let total_weight: f64 = weights.iter().sum();
+
+    weighted_sum / total_weight // Divide the weighted sum by the total of all weights
+}
+
+fn ntp_roundtrim(host: &str, port: u16) -> Result<NTPResult, std::io::Error> {
+    let dest = format!("{}:{}", host, port);
+    let timeout = Duration::from_secs(1);
+
+    let request = NTPMessage::client();
+    let mut response = NTPMessage::new();
+
+    let udp = UdpSocket::bind(LOCAL_ADDR)?;
+    udp.connect(dest).expect("Unable to connect");
+
+    let t1 = Utc::now();
+    udp.send(&request.data)?;
+    udp.set_read_timeout(Some(timeout))?;
+    udp.recv_from(&mut response.data)?;
+    let t4 = Utc::now();
+
+    let t2: DateTime<Utc> = response.rx_time().unwrap().into();
+    let t3: DateTime<Utc> = response.tx_time().unwrap().into();
+
+    Ok(NTPResult { t1, t2, t3, t4 })
+}
+
+fn check_time() -> Result<f64, std::io::Error> {
+    const NTP_PORT: u16 = 123;
+    let servers = [
+        "time.nist.gov",
+        "time.apple.com",
+        "time.euro.apple.com",
+        "time.google.com",
+        "time2.google.com",
+    ];
+
+    let mut times = Vec::with_capacity(servers.len());
+
+    for server in servers {
+        print!("{} => ", server);
+
+        match ntp_roundtrim(server, NTP_PORT) {
+            Ok(time) => {
+                println!("{}ms away from local system time", time.offset());
+                times.push(time);
+            }
+            Err(_) => println!("? [response took too long]"),
+        }
+    }
+    let mut offsets = Vec::with_capacity(times.len());
+    let mut offset_weights = Vec::with_capacity(times.len());
+
+    for time in &times {
+        let offset = time.offset() as f64;
+        let delay = time.delay() as f64;
+
+        let weight = 1_000_000.0 / (delay * delay);
+        if weight.is_finite() {
+            offsets.push(offset);
+            offset_weights.push(weight);
+        }
+    }
+
+    let avg_offset = weighted_mean(&offsets, &offset_weights);
+    Ok(avg_offset)
+}
+
 fn main() {
     let args = Cli::parse();
     let action = args.get_action();
@@ -149,6 +230,16 @@ fn main() {
                 None => (),
             }
         }
-        Action::CheckNtp => unimplemented!(),
+        Action::CheckNtp => {
+            let offset = check_time().unwrap() as isize;
+            let adjust = Duration::from_millis(offset as u64);
+            let now = if offset.is_positive() {
+                Utc::now() + adjust
+            } else {
+                Utc::now() - adjust
+            };
+            let sign = if offset.is_positive() { "+" } else { "-" };
+            println!("{now}  ({sign}{:?})", adjust);
+        }
     }
 }
