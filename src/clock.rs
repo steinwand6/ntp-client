@@ -8,7 +8,7 @@ impl Clock {
     }
 
     #[cfg(not(windows))]
-    pub fn set<tz: TimeZone>(t: DateTime<tz>) {
+    pub fn set<TZ: TimeZone>(t: DateTime<TZ>) {
         use libc::{settimeofday, timezone};
         use libc::{suseconds_t, time_t, timeval};
 
