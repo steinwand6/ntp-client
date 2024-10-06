@@ -1,5 +1,10 @@
+mod clock;
+
 use byteorder::{BigEndian, ReadBytesExt};
 use chrono::{DateTime, TimeZone, Timelike, Utc};
+use clap::{Parser, ValueEnum};
+
+use clock::Clock;
 
 const NTP_MESSAGE_LENGTH: usize = 48;
 // Number of seconds between 1 Jan 1900(the NTP epoch) and 1 Jan 1970 (the UNIX epoch)
@@ -103,6 +108,71 @@ impl NTPMessage {
     }
 }
 
+#[derive(Parser, Debug)]
+#[command(
+    name = "clock",
+    version = "0.1",
+    about = "Gets and (aspirationally) sets the time."
+)]
+struct Cli {
+    // Action to perform: get or set
+    #[arg()]
+    action: Option<Action>,
+    // Time standard to use for output
+    #[arg(short, long = "use-standard", default_value = "rfc3339")]
+    std: TimeStandard,
+    // Datetime value, used when the action is "set"
+    #[arg()]
+    datetime: Option<String>,
+}
+
+#[derive(Debug, ValueEnum, Clone)]
+enum Action {
+    Get,
+    Set,
+    CheckNtp,
+}
+
+#[derive(Debug, ValueEnum, Clone)]
+enum TimeStandard {
+    Rfc3339,
+    Rfc2822,
+    Timestamp,
+}
+
 fn main() {
-    println!("Hello, world!");
+    let args = Cli::parse();
+    let action = args.action.unwrap_or(Action::Get);
+    let std = args.std;
+    let datetime = args.datetime;
+    println!("{:?} {:?}", action, std);
+    match action {
+        Action::Get => {
+            let now = Clock::get();
+            match std {
+                TimeStandard::Rfc3339 => println!("RFC3339: {}", now.to_rfc3339()),
+                TimeStandard::Rfc2822 => println!("RCF2822: {}", now.to_rfc2822()),
+                TimeStandard::Timestamp => println!("{}", now.timestamp()),
+            }
+        }
+        Action::Set => {
+            let t_ = datetime.unwrap();
+            let t = match std {
+                TimeStandard::Rfc3339 => DateTime::parse_from_rfc3339(&t_),
+                TimeStandard::Rfc2822 => DateTime::parse_from_rfc2822(&t_),
+                _ => unimplemented!(),
+            };
+            let t = t.expect(&format!("Unable to parse {} as {:?}", t_, std));
+            Clock::set(t);
+
+            let maybe_error = std::io::Error::last_os_error();
+            let os_error_code = maybe_error.raw_os_error();
+            match os_error_code {
+                Some(0) => (),
+                Some(_) => eprintln!("Unable to set the time: {:?}", maybe_error),
+                None => (),
+            }
+        }
+        Action::CheckNtp => unimplemented!(),
+    }
 }
